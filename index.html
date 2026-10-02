@@ -82,7 +82,7 @@ const TOKEN     = 'CEER';
 const DEVICE    = localStorage.getItem('dev') || (localStorage.setItem('dev', 'TB-' + Math.random().toString(36).slice(2,6)), localStorage.getItem('dev'));
 const DEDUPE_MS = 3000;
 const TIMEOUT_MS = 8000;
-const SCAN_INTERVAL = 70;
+const SCAN_INTERVAL = 40;
 // ======================
 
 const $ = id => document.getElementById(id);
@@ -178,34 +178,39 @@ function loopNative(){
     .finally(() => { timer = setTimeout(loopNative, SCAN_INTERVAL); });
 }
 
-// ---- ZXing: chỉ Code 128, chỉ giải mã vùng giữa khung ----
-let zr = null, canvas = null, cctx = null;
+// ---- ZXing: chỉ Code 128. Mỗi khung: quét NHANH; cứ 4 khung mới quét KỸ ----
+let zrFast = null, zrHard = null, canvas = null, cctx = null, frameNo = 0;
+function mkReader(hard){
+  const Z = window.ZXing, r = new Z.MultiFormatReader(), h = new Map();
+  h.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128]);
+  if(hard) h.set(Z.DecodeHintType.TRY_HARDER, true);
+  r.setHints(h); return r;
+}
 function initZXing(){
-  if(zr) return;
-  const Z = window.ZXing;
-  zr = new Z.MultiFormatReader();
-  const hints = new Map();
-  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128]);
-  hints.set(Z.DecodeHintType.TRY_HARDER, true);
-  zr.setHints(hints);
+  if(zrFast) return;
+  zrFast = mkReader(false); zrHard = mkReader(true);
   canvas = document.createElement('canvas');
   cctx = canvas.getContext('2d', { willReadFrequently: true });
 }
 function loopZXing(){
   if(!scanning) return;
+  const t0 = performance.now();
   const vw = video.videoWidth, vh = video.videoHeight;
   if(vw && video.readyState >= 2){
     const Z = window.ZXing;
-    const sw = Math.round(vw * 0.9), sh = Math.round(vh * 0.4);
+    const sw = Math.round(vw * 0.9), sh = Math.round(vh * 0.25);
     const sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
-    canvas.width = sw; canvas.height = sh;
-    cctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    const k = Math.min(1, 800 / sw);               // tối đa 800px ngang => giải mã nhanh hơn ~2x
+    canvas.width = Math.round(sw * k); canvas.height = Math.round(sh * k);
+    cctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     try{
       const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(canvas)));
-      onCode(zr.decode(bmp).getText());
-    }catch(e){ /* không thấy mã trong khung này */ }
+      const rd = (++frameNo % 4 === 0) ? zrHard : zrFast;
+      onCode(rd.decode(bmp).getText());
+    }catch(e){ /* chưa thấy mã */ }
   }
-  timer = setTimeout(loopZXing, SCAN_INTERVAL);
+  // Bù thời gian giải mã: không bao giờ chờ thừa
+  timer = setTimeout(loopZXing, Math.max(0, SCAN_INTERVAL - (performance.now() - t0)));
 }
 
 $('startBtn').onclick = () => { getAudio(); tone(800, .06, .1); startCamera(); };
@@ -234,12 +239,13 @@ function onCode(raw){
       addHistory(false, mssv, 'Không tìm thấy');
       return;
     }
-    // Chưa kêu OK: chỉ hiển thị "đang xử lý", âm thanh phát 1 lần theo kết quả server
-    setResult('wait', dispName(s) || mssv, `${label} · ${s.role}\nĐang đồng bộ lên Sheet…`);
+    // Báo OK NGAY (không chờ Sheet); server chỉ phát thêm âm thanh nếu từ chối
+    feedback(true);
+    setResult('ok', dispName(s) || mssv, `${label} · ${s.role}\n⏳ Đang ghi lên Sheet…`);
   }else{
     setResult('wait', mssv, label + ' · Đang gửi…');
   }
-  submit(mssv);
+  submit(mssv, Object.keys(STUDENT_DB).length > 0);
 }
 
 $('manualBtn').onclick = () => {
@@ -253,10 +259,10 @@ $('manualBtn').onclick = () => {
 const getQ = () => { try{ return JSON.parse(localStorage.getItem('queue') || '[]'); }catch(e){ return []; } };
 const setQ = q => { localStorage.setItem('queue', JSON.stringify(q)); $('pend').textContent = q.length; };
 
-function submit(mssv){
+function submit(mssv, opt){
   const item = {
     id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random(),
-    mssv, type: mode, session: $('sess').value, ts: new Date().toISOString(), device: DEVICE, token: TOKEN
+    mssv, type: mode, session: $('sess').value, ts: new Date().toISOString(), device: DEVICE, token: TOKEN, opt: !!opt
   };
   // Lưu vào hàng đợi NGAY: nếu tắt trình duyệt giữa chừng vẫn không mất lượt quét
   const q = getQ(); q.push(item); setQ(q);
@@ -283,7 +289,6 @@ async function send(item, interactive){
       setResult('wait', item.mssv, busy
         ? 'Máy chủ đang bận — đã lưu, sẽ tự gửi lại.'
         : 'Chưa kết nối được — đã lưu ngoại tuyến, sẽ tự gửi lại.');
-      feedback(false);
     }
     return false;
   }finally{ clearTimeout(to); }
@@ -293,8 +298,8 @@ function showServerResult(item, r){
   const label = item.type === 'in' ? 'CHECK IN' : 'CHECK OUT';
   const nm = r.name && r.name !== 'nan' ? r.name : (r.mssv || item.mssv);
   if(r.ok){
-    feedback(true);
-    setResult('ok', nm, `${label} · ${r.session} · ${r.time}\n${r.mssv} · ${r.cls || ''}`);
+    if(!item.opt) feedback(true);
+    setResult('ok', nm, `${label} · ${r.session} · ${r.time}\n✔ Đã ghi Sheet · ${r.mssv} · ${r.cls || ''}`);
     addHistory(true, nm, `${label} ${r.time}`);
   }else{
     feedback(false);
