@@ -9,6 +9,7 @@ const CONFIG = {
   COL_ROLE: 6,       // F
   FIRST_TIME_COL: 8, // H
   CACHE_TTL: 21600,  // 6 giờ
+  SHEET_TONG: 'DANH SÁCH TỔNG',  // đọc: B tên, E MSSV, F vai trò, G SĐT, H form đăng ký, I..M đăng ký 5 ca, N team 3/10, O team 4/10, Q ghi chú
 
   COLOR_IN: '#bbf7d0',
   COLOR_OUT: '#fecaca',
@@ -22,6 +23,61 @@ const CONFIG = {
     { name: 'TỐI 4/10',   date: '2026-10-04', from: 15.5, to: 23.0 }
   ]
 };
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  if (p.token !== CONFIG.TOKEN) return json_({ ok: false, code: 'AUTH', message: 'Sai token' });
+  if (p.action === 'status') {
+    try { return json_(getStatus_()); }
+    catch (err) { return json_({ ok: false, code: 'ERROR', message: String(err) }); }
+  }
+  return json_({ ok: true, message: 'API hoạt động' });
+}
+
+// Danh sách người + đăng ký + team + giờ check in/out (join theo MSSV). Cache 4 giây.
+function getStatus_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('status');
+  if (hit) return JSON.parse(hit);
+
+  const ss = SpreadsheetApp.getActive();
+  const n = CONFIG.SESSIONS.length;
+
+  // Giờ chấm công theo MSSV
+  const cc = ss.getSheetByName(CONFIG.SHEET);
+  const att = {};
+  const ccLast = cc.getLastRow();
+  if (ccLast >= CONFIG.FIRST_ROW) {
+    const lastCol = CONFIG.FIRST_TIME_COL + n * 2 - 1;
+    cc.getRange(CONFIG.FIRST_ROW, 1, ccLast - CONFIG.FIRST_ROW + 1, lastCol).getDisplayValues().forEach(r => {
+      const m = String(r[CONFIG.COL_MSSV - 1]).trim();
+      if (m) att[m] = r.slice(CONFIG.FIRST_TIME_COL - 1).map(x => String(x).trim());
+    });
+  }
+
+  // Danh sách tổng
+  const tg = ss.getSheetByName(CONFIG.SHEET_TONG);
+  const tLast = tg.getLastRow();
+  const people = [];
+  if (tLast >= CONFIG.FIRST_ROW) {
+    tg.getRange(CONFIG.FIRST_ROW, 1, tLast - CONFIG.FIRST_ROW + 1, 17).getDisplayValues().forEach(r => {
+      const m = String(r[4]).trim();
+      if (!m) return;
+      let name = String(r[1]).trim();
+      if (!name || name === 'nan') name = (String(r[2]).trim() + ' ' + String(r[3]).trim()).trim();
+      const reg = [];
+      for (let i = 0; i < n; i++) reg.push(String(r[8 + i]).toUpperCase() === 'TRUE' ? 1 : 0);
+      people.push({
+        m: m, n: name, r: String(r[5]).trim(), p: String(r[6]).trim(), h: String(r[7]).trim(),
+        reg: reg, tN: String(r[13]).trim(), tO: String(r[14]).trim(), note: String(r[16]).trim(),
+        a: att[m] || new Array(n * 2).fill('')
+      });
+    });
+  }
+  const out = { ok: true, ts: new Date().toISOString(), sessions: CONFIG.SESSIONS.map(s => s.name), people: people };
+  try { cache.put('status', JSON.stringify(out), 4); } catch (e) {}
+  return out;
+}
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -131,6 +187,7 @@ function handleScan_(p) {
   }
   if (!result.ok) { result.mssv = mssv; result.name = name; }
 
+  cache.remove('status');
   if (p.id) cache.put('id_' + p.id, JSON.stringify(result), CONFIG.CACHE_TTL);
   return { result, log: [ss, ts, mssv, name, type, result.session || '', result, p.device] };
 }

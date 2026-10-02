@@ -38,11 +38,44 @@
   li{background:var(--card);border-radius:10px;padding:9px 12px;margin-bottom:6px;font-size:14px;display:flex;justify-content:space-between;gap:8px}
   li .l{color:var(--err)} li .g{color:#4ade80}
   li small{color:var(--mut);display:block}
+  .tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 10px}
+  .tabs button{padding:11px;border:0;border-radius:10px;background:var(--card);color:var(--mut);font-size:15px;font-weight:700}
+  .tabs button.active{background:#2563eb;color:#fff}
+  .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:8px}
+  .chip{flex:0 0 auto;border:2px solid transparent;border-radius:10px;background:var(--card);color:var(--mut);padding:7px 10px;font-size:13px;font-weight:700;text-align:center}
+  .chip small{display:block;font-size:12px;font-weight:400;color:var(--tx)}
+  .chip.on{border-color:#60a5fa;color:#fff}
+  .tbar{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--mut);margin-bottom:8px;flex-wrap:wrap}
+  .tbar button{border:0;border-radius:8px;background:var(--card);color:var(--tx);padding:8px 12px;font-size:13px}
+  .tbar label{display:flex;align-items:center;gap:6px}
+  #summary{background:var(--card);border-radius:12px;padding:12px;font-size:18px;margin-bottom:10px}
+  #summary .miss{color:#f87171;font-weight:700}
+  .grp{background:var(--card);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+  .grp header{display:flex;justify-content:space-between;gap:8px;font-size:15px}
+  .bar{height:6px;background:#334155;border-radius:9px;margin:8px 0;overflow:hidden}
+  .bar div{height:100%;background:#22c55e}
+  .lbl{font-size:12px;color:#f87171;margin:6px 0 4px;font-weight:700}.lbl.ok{color:#4ade80}
+  .person{width:100%;display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;border:0;border-radius:9px;padding:9px 10px;margin-bottom:5px;background:#0f172a;color:var(--tx);font-size:14px}
+  .person small{display:block;color:var(--mut);font-size:12px}
+  .person i{font-style:normal;font-size:13px}.person.miss i{color:#f87171}.person.here i{color:#4ade80}
+  details summary{font-size:13px;color:var(--mut);padding:6px 0}
+  .empty{text-align:center;color:var(--mut);padding:24px}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;justify-content:center;z-index:9}
+  #modal.show{display:flex}
+  #modal .box{background:var(--card);width:100%;max-width:560px;max-height:85%;overflow:auto;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+  #modal h2{margin:0 0 2px;font-size:19px}
+  #modal table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  #modal td,#modal th{padding:7px 4px;border-bottom:1px solid #334155;text-align:left}
+  #modal .yes{color:#4ade80}#modal .no{color:#f87171}
+  #modal a.call{display:inline-block;margin:6px 0;padding:8px 14px;border-radius:9px;background:#16a34a;color:#fff;text-decoration:none;font-weight:700}
+  #modal .x{width:100%;padding:12px;border:0;border-radius:10px;background:#334155;color:#fff;font-size:15px;margin-top:8px}
 </style>
 </head>
 <body>
 <h1>Điểm danh TV/CTV <span class="badge" id="net">…</span></h1>
 
+<nav class="tabs"><button id="tabScan" class="active">📷 Quét</button><button id="tabTeam">👥 DANH SÁCH</button></nav>
+<div id="pgScan">
 <select id="sess">
   <option value="">Buổi: tự động theo giờ</option>
   <option value="0">SÁNG 3/10</option><option value="1">CHIỀU 3/10</option>
@@ -73,6 +106,16 @@
 
 <div class="result" id="result"><b>Sẵn sàng quét</b><small>Chọn CHECK IN hoặc CHECK OUT rồi đưa mã vào khung.</small></div>
 <ul id="history"></ul>
+</div>
+
+<div id="pgTeam" style="display:none">
+  <div class="chips" id="chips"></div>
+  <div class="tbar"><button id="teamReload">⟳ Tải lại</button><label><input type="checkbox" id="onlyMiss" checked> Chỉ nhóm còn thiếu</label><span id="teamInfo"></span></div>
+  <div id="summary">…</div>
+  <div id="groups"></div>
+</div>
+<div id="modal"><div class="box" id="modalBox"></div></div>
+
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
@@ -345,6 +388,121 @@ function addHistory(ok, name, note){
 function net(){ $('net').textContent = (navigator.onLine ? '● Online' : '○ Offline') + ' · ' + DEVICE; }
 window.addEventListener('online', net); window.addEventListener('offline', net);
 net(); setQ(getQ());
+
+// ================= TAB ĐỘI NGŨ =================
+const SESS_NAMES = ['SÁNG 3/10','CHIỀU 3/10','SÁNG 4/10','CHIỀU 4/10','TỐI 4/10'];
+const SESS_WIN = [['2026-10-03',7,12.5],['2026-10-03',12.5,20],['2026-10-04',3,11.5],['2026-10-04',11.5,15.5],['2026-10-04',15.5,23]];
+const STATUS_REFRESH_MS = 20000;
+let TEAM = null, teamSess = -1, teamTimer = null, loadingTeam = false;
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pname = p => (p.n && p.n !== 'nan') ? p.n : (dispName(STUDENT_DB[p.m]) || p.m);
+
+function autoSess(){
+  const n = new Date(), pad = x => String(x).padStart(2, '0');
+  const d = n.getFullYear() + '-' + pad(n.getMonth() + 1) + '-' + pad(n.getDate());
+  const h = n.getHours() + n.getMinutes() / 60;
+  const i = SESS_WIN.findIndex(w => w[0] === d && h >= w[1] && h < w[2]);
+  return i >= 0 ? i : (d > '2026-10-03' ? 2 : 0);
+}
+
+function showTab(t){
+  const team = t === 'team';
+  $('pgScan').style.display = team ? 'none' : '';
+  $('pgTeam').style.display = team ? '' : 'none';
+  $('tabScan').classList.toggle('active', !team);
+  $('tabTeam').classList.toggle('active', team);
+  clearInterval(teamTimer);
+  if(team){
+    stopCamera(); $('start').style.display = 'flex';   // Safari: quay lại tab Quét phải chạm "Bật camera"
+    if(teamSess < 0) teamSess = autoSess();
+    if(TEAM) renderTeam();
+    loadTeam();
+    teamTimer = setInterval(() => { if(!document.hidden) loadTeam(); }, STATUS_REFRESH_MS);
+  }
+}
+$('tabScan').onclick = () => showTab('scan');
+$('tabTeam').onclick = () => showTab('team');
+$('teamReload').onclick = () => loadTeam();
+$('onlyMiss').onchange = () => renderTeam();
+
+async function loadTeam(){
+  if(loadingTeam) return;
+  loadingTeam = true;
+  $('teamInfo').textContent = 'Đang tải…';
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+  try{
+    const r = await fetch(API_URL + '?action=status&token=' + encodeURIComponent(TOKEN), { signal: ctl.signal });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.message || 'Lỗi');
+    TEAM = d; renderTeam();
+    $('teamInfo').textContent = 'Cập nhật ' + new Date().toLocaleTimeString('vi-VN');
+  }catch(e){
+    $('teamInfo').textContent = 'Không tải được' + (TEAM ? ' (đang hiện dữ liệu cũ)' : '') + ': ' + e.message;
+  }finally{ clearTimeout(to); loadingTeam = false; }
+}
+
+function renderTeam(){
+  if(!TEAM) return;
+  const P = TEAM.people, s = teamSess, key = s < 2 ? 'tN' : 'tO';   // 3/10 -> cột N, 4/10 -> cột O
+  $('chips').innerHTML = SESS_NAMES.map((nm, i) => {
+    const reg = P.filter(p => p.reg[i]), got = reg.filter(p => p.a[i * 2]).length;
+    return `<button class="chip${i === s ? ' on' : ''}" data-s="${i}">${nm}<small>${got}/${reg.length}</small></button>`;
+  }).join('');
+
+  const mem = P.filter(p => p.reg[s] || p.a[s * 2]);   // đã đăng ký ca này, hoặc đã quét dù không đăng ký
+  const groups = {};
+  mem.forEach(p => { const k = (p[key] || '').trim() || 'Chưa phân team'; (groups[k] = groups[k] || []).push(p); });
+  const list = Object.entries(groups).map(([name, ms]) => {
+    const exp = ms.filter(p => p.reg[s]);
+    return { name, ms, exp: exp.length, here: exp.filter(p => p.a[s * 2]).length };
+  }).sort((a, b) => (a.name === 'Chưa phân team') - (b.name === 'Chưa phân team') || b.exp - a.exp);
+
+  const tot = list.reduce((a, g) => a + g.exp, 0), got = list.reduce((a, g) => a + g.here, 0);
+  $('summary').innerHTML = tot
+    ? `${SESS_NAMES[s]}: <b>${got}/${tot}</b> đã đến · <span class="miss">${tot - got} vắng</span>`
+    : `${SESS_NAMES[s]}: chưa có ai đăng ký ca này`;
+
+  const only = $('onlyMiss').checked;
+  const row = (p, cls) => `<button class="person ${cls}" data-m="${esc(p.m)}"><span>${esc(pname(p))}<small>${esc(p.m)} · ${esc(p.r)}${p.reg[s] ? '' : ' · ngoài đăng ký'}</small></span><i>${cls === 'miss' ? '✖ vắng' : esc(p.a[s * 2])}</i></button>`;
+  $('groups').innerHTML = list.filter(g => !only || g.here < g.exp).map(g => {
+    const miss = g.ms.filter(p => p.reg[s] && !p.a[s * 2]);
+    const here = g.ms.filter(p => p.a[s * 2]);
+    const pct = g.exp ? Math.round(g.here * 100 / g.exp) : 0;
+    return `<section class="grp"><header><b>${esc(g.name)}</b><span>${g.here}/${g.exp}</span></header>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${miss.length ? `<div class="lbl">Còn vắng (${miss.length})</div>` + miss.map(p => row(p, 'miss')).join('') : '<div class="lbl ok">✔ Đã đủ</div>'}
+      ${here.length ? `<details><summary>Đã đến (${here.length})</summary>${here.map(p => row(p, 'here')).join('')}</details>` : ''}</section>`;
+  }).join('') || '<div class="empty">Không có nhóm nào còn thiếu 🎉</div>';
+}
+
+$('chips').onclick = e => {
+  const b = e.target.closest('.chip'); if(!b) return;
+  teamSess = Number(b.dataset.s); renderTeam();
+};
+$('groups').onclick = e => {
+  const b = e.target.closest('.person'); if(b) openPerson(b.dataset.m);
+};
+
+function openPerson(m){
+  const p = TEAM && TEAM.people.find(x => x.m === m); if(!p) return;
+  const yn = v => v ? '<span class="yes">✔ Có</span>' : '<span class="no">✖ Không</span>';
+  const rows = SESS_NAMES.map((nm, i) => {
+    const a = p.a[i * 2], o = p.a[i * 2 + 1];
+    return `<tr><td>${nm}</td><td>${yn(p.reg[i])}</td><td>${a ? esc(a) + (o ? ' → ' + esc(o) : ' (chưa out)') : '<span class="no">chưa quét</span>'}</td></tr>`;
+  }).join('');
+  $('modalBox').innerHTML = `
+    <h2>${esc(pname(p))}</h2>
+    <div style="color:var(--mut);font-size:14px">${esc(p.m)} · ${esc(p.r)}</div>
+    ${p.p ? `<a class="call" href="tel:${esc(p.p)}">📞 ${esc(p.p)}</a>` : ''}
+    <table><tr><th>Ca</th><th>Đăng ký</th><th>Check in → out</th></tr>${rows}</table>
+    ${p.h ? `<div style="font-size:14px;margin-bottom:6px"><b>Đăng ký (theo form):</b><br>${esc(p.h)}</div>` : ''}
+    <div style="font-size:14px"><b>Team 3/10:</b> ${esc(p.tN || '—')}<br><b>Team 4/10:</b> ${esc(p.tO || '—')}</div>
+    ${p.note ? `<div style="font-size:14px;margin-top:6px"><b>Ghi chú:</b> ${esc(p.note)}</div>` : ''}
+    <button class="x" id="modalClose">Đóng</button>`;
+  $('modal').classList.add('show');
+  $('modalClose').onclick = () => $('modal').classList.remove('show');
+}
+$('modal').onclick = e => { if(e.target.id === 'modal') $('modal').classList.remove('show'); };
 </script>
 </body>
 </html>
