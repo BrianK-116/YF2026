@@ -111,6 +111,7 @@
 <div id="pgTeam" style="display:none">
   <div class="chips" id="chips"></div>
   <div class="tbar"><button id="teamReload">⟳ Tải lại</button><label><input type="checkbox" id="onlyMiss" checked> Chỉ nhóm còn thiếu</label><span id="teamInfo"></span></div>
+  <input id="teamSearch" placeholder="Tìm tên hoặc MSSV…" style="width:100%;padding:11px;font-size:16px;border-radius:10px;border:1px solid #334155;background:var(--card);color:var(--tx);margin-bottom:8px">
   <div id="summary">…</div>
   <div id="groups"></div>
 </div>
@@ -424,6 +425,7 @@ $('tabScan').onclick = () => showTab('scan');
 $('tabTeam').onclick = () => showTab('team');
 $('teamReload').onclick = () => loadTeam();
 $('onlyMiss').onchange = () => renderTeam();
+$('teamSearch').oninput = () => renderTeam();
 
 async function loadTeam(){
   if(loadingTeam) return;
@@ -441,38 +443,50 @@ async function loadTeam(){
   }finally{ clearTimeout(to); loadingTeam = false; }
 }
 
+const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').toLowerCase();
+
 function renderTeam(){
   if(!TEAM) return;
-  const P = TEAM.people, s = teamSess, key = s < 2 ? 'tN' : 'tO';   // 3/10 -> cột N, 4/10 -> cột O
+  const P = TEAM.people, s = teamSess;
+  const flat = s >= 3;                                   // CHIỀU/TỐI 4/10: điểm danh chung, không chia team
+  const key = s < 2 ? 'tN' : 'tO';                      // 3/10: team theo tab 3.10 · 4/10: team theo tab Nhà tài trợ / Gây quỹ
+  const NONE = 'Chưa phân team';
+  const teamOf = p => { p._duty = ''; return flat ? 'Toàn danh sách đăng ký' : ((p[key] || '').trim() || NONE); };
+  const rank = n => n === NONE ? 1 : 0;
+
   $('chips').innerHTML = SESS_NAMES.map((nm, i) => {
     const reg = P.filter(p => p.reg[i]), got = reg.filter(p => p.a[i * 2]).length;
     return `<button class="chip${i === s ? ' on' : ''}" data-s="${i}">${nm}<small>${got}/${reg.length}</small></button>`;
   }).join('');
 
-  const mem = P.filter(p => p.reg[s] || p.a[s * 2]);   // đã đăng ký ca này, hoặc đã quét dù không đăng ký
+  const mem = P.filter(p => p.reg[s] || p.a[s * 2]);     // đã đăng ký ca này, hoặc đã quét dù không đăng ký
   const groups = {};
-  mem.forEach(p => { const k = (p[key] || '').trim() || 'Chưa phân team'; (groups[k] = groups[k] || []).push(p); });
+  mem.forEach(p => { const k = teamOf(p); (groups[k] = groups[k] || []).push(p); });
   const list = Object.entries(groups).map(([name, ms]) => {
     const exp = ms.filter(p => p.reg[s]);
     return { name, ms, exp: exp.length, here: exp.filter(p => p.a[s * 2]).length };
-  }).sort((a, b) => (a.name === 'Chưa phân team') - (b.name === 'Chưa phân team') || b.exp - a.exp);
+  }).sort((a, b) => rank(a.name) - rank(b.name) || b.exp - a.exp);
 
   const tot = list.reduce((a, g) => a + g.exp, 0), got = list.reduce((a, g) => a + g.here, 0);
   $('summary').innerHTML = tot
     ? `${SESS_NAMES[s]}: <b>${got}/${tot}</b> đã đến · <span class="miss">${tot - got} vắng</span>`
     : `${SESS_NAMES[s]}: chưa có ai đăng ký ca này`;
 
-  const only = $('onlyMiss').checked;
-  const row = (p, cls) => `<button class="person ${cls}" data-m="${esc(p.m)}"><span>${esc(pname(p))}<small>${esc(p.m)} · ${esc(p.r)}${p.reg[s] ? '' : ' · ngoài đăng ký'}</small></span><i>${cls === 'miss' ? '✖ vắng' : esc(p.a[s * 2])}</i></button>`;
+  const q = norm($('teamSearch').value.trim());
+  const match = p => !q || norm(pname(p) + ' ' + p.m).includes(q);
+  const only = $('onlyMiss').checked && !q;
+  const row = (p, cls) => `<button class="person ${cls}" data-m="${esc(p.m)}"><span>${esc(pname(p))}<small>${esc(p.m)} · ${esc(p.r)}${p._duty ? ' · ' + esc(p._duty) : ''}${p.reg[s] ? '' : ' · ngoài đăng ký'}</small></span><i>${cls === 'miss' ? '✖ vắng' : esc(p.a[s * 2])}</i></button>`;
+
   $('groups').innerHTML = list.filter(g => !only || g.here < g.exp).map(g => {
-    const miss = g.ms.filter(p => p.reg[s] && !p.a[s * 2]);
-    const here = g.ms.filter(p => p.a[s * 2]);
+    const miss = g.ms.filter(p => p.reg[s] && !p.a[s * 2] && match(p));
+    const here = g.ms.filter(p => p.a[s * 2] && match(p));
+    if(q && !miss.length && !here.length) return '';
     const pct = g.exp ? Math.round(g.here * 100 / g.exp) : 0;
     return `<section class="grp"><header><b>${esc(g.name)}</b><span>${g.here}/${g.exp}</span></header>
       <div class="bar"><div style="width:${pct}%"></div></div>
-      ${miss.length ? `<div class="lbl">Còn vắng (${miss.length})</div>` + miss.map(p => row(p, 'miss')).join('') : '<div class="lbl ok">✔ Đã đủ</div>'}
-      ${here.length ? `<details><summary>Đã đến (${here.length})</summary>${here.map(p => row(p, 'here')).join('')}</details>` : ''}</section>`;
-  }).join('') || '<div class="empty">Không có nhóm nào còn thiếu 🎉</div>';
+      ${miss.length ? `<div class="lbl">Còn vắng (${miss.length})</div>` + miss.map(p => row(p, 'miss')).join('') : (q ? '' : '<div class="lbl ok">✔ Đã đủ</div>')}
+      ${here.length ? `<details${q ? ' open' : ''}><summary>Đã đến (${here.length})</summary>${here.map(p => row(p, 'here')).join('')}</details>` : ''}</section>`;
+  }).join('') || `<div class="empty">${q ? 'Không tìm thấy' : 'Không có nhóm nào còn thiếu 🎉'}</div>`;
 }
 
 $('chips').onclick = e => {

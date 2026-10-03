@@ -9,6 +9,7 @@ const CONFIG = {
   COL_ROLE: 6,       // F
   FIRST_TIME_COL: 8, // H
   CACHE_TTL: 21600,  // 6 giờ
+  MEDIA_IDS: ['25128013', '25124045', '24156133'],  // team Media (cả 3/10 và 4/10)
   SHEET_TONG: 'DANH SÁCH TỔNG',  // đọc: B tên, E MSSV, F vai trò, G SĐT, H form đăng ký, I..M đăng ký 5 ca, N team 3/10, O team 4/10, Q ghi chú
 
   COLOR_IN: '#bbf7d0',
@@ -34,6 +35,34 @@ function doGet(e) {
   return json_({ ok: true, message: 'API hoạt động' });
 }
 
+// Tìm sheet theo tên, bỏ qua khoảng trắng đầu/cuối (vd ' GÂY QUỸ')
+function findSheet_(ss, name) {
+  const t = name.trim().toLowerCase();
+  return ss.getSheets().find(s => s.getName().trim().toLowerCase() === t) || null;
+}
+// Lấy các MSSV (8 chữ số) trong 1 cột của 1 sheet
+function colIds_(ss, sheetName, col) {
+  const sh = findSheet_(ss, sheetName);
+  if (!sh) throw new Error('Không thấy sheet: ' + sheetName);
+  const last = sh.getLastRow();
+  if (last < 1) return [];
+  return sh.getRange(1, col, last, 1).getDisplayValues()
+    .map(r => { const m = String(r[0]).match(/\d{8}/); return m ? m[0] : ''; })
+    .filter(Boolean);
+}
+// Chia team theo các tab: gặp trước thì ưu tiên trước; Media ghi đè tất cả
+function teamMaps_(ss) {
+  const t3 = {}, t4 = {};
+  const put = (map, ids, label) => ids.forEach(m => { if (!map[m]) map[m] = label; });
+  put(t3, colIds_(ss, '3.10', 4), 'Gian hàng 3.10');                     // 3.10 cột D
+  put(t3, colIds_(ss, '3.10', 8), 'Set up gian hàng Ban');               // 3.10 cột H
+  put(t4, colIds_(ss, 'GIAN HÀNG NHÀ TÀI TRỢ', 3), 'Gian hàng nhà tài trợ');   // cột C
+  put(t4, colIds_(ss, 'GIAN HÀNG NHÀ TÀI TRỢ', 10), 'Gian hàng nhà tài trợ');  // cột J
+  put(t4, colIds_(ss, 'GÂY QUỸ', 4), 'Gây quỹ');                         // GÂY QUỸ cột D
+  CONFIG.MEDIA_IDS.forEach(m => { t3[m] = 'Media'; t4[m] = 'Media'; });
+  return { t3: t3, t4: t4 };
+}
+
 // Danh sách người + đăng ký + team + giờ check in/out (join theo MSSV). Cache 4 giây.
 function getStatus_() {
   const cache = CacheService.getScriptCache();
@@ -55,6 +84,8 @@ function getStatus_() {
     });
   }
 
+  const tm = teamMaps_(ss);
+
   // Danh sách tổng
   const tg = ss.getSheetByName(CONFIG.SHEET_TONG);
   const tLast = tg.getLastRow();
@@ -69,7 +100,7 @@ function getStatus_() {
       for (let i = 0; i < n; i++) reg.push(String(r[8 + i]).toUpperCase() === 'TRUE' ? 1 : 0);
       people.push({
         m: m, n: name, r: String(r[5]).trim(), p: String(r[6]).trim(), h: String(r[7]).trim(),
-        reg: reg, tN: String(r[13]).trim(), tO: String(r[14]).trim(), note: String(r[16]).trim(),
+        reg: reg, tN: tm.t3[m] || '', tO: tm.t4[m] || '', note: String(r[16]).trim(),
         a: att[m] || new Array(n * 2).fill('')
       });
     });
